@@ -97,6 +97,8 @@ const (
 	maxPendingRevokes = 16
 
 	recommendedMaxRequestBytes = 10 * 1024 * 1024
+
+	readyPercent = 0.9
 )
 
 var (
@@ -1661,13 +1663,60 @@ func (s *EtcdServer) PromoteMember(ctx context.Context, id uint64) ([]*membershi
 }
 
 func (s *EtcdServer) mayPromoteMember(id types.ID) error {
+	err := isLearnerReady(uint64(id))
+	if err != nil {
+		return err
+	}
+
 	if !s.Cfg.StrictReconfigCheck {
 		return nil
 	}
-	// TODO add more checks whether the member can be promoted.
-	// like learner progress check or if cluster is ready to promote a learner
-	// this is an example to get progress
-	fmt.Printf("raftStatus, %#v\n", raftStatus())
+	if !s.cluster.IsReadyToPromoteMember(uint64(id)) {
+		if lg := s.getLogger(); lg != nil {
+			lg.Warn(
+				"rejecting member promote request; not enough healthy members",
+				zap.String("local-member-id", s.ID().String()),
+				zap.String("requested-member-remove-id", id.String()),
+				zap.Error(ErrNotEnoughStartedMembers),
+			)
+		} else {
+			plog.Warningf("not enough started members, rejecting promote member %s", id)
+		}
+		return ErrNotEnoughStartedMembers
+	}
+
+	return nil
+}
+
+// check whether the learner catches up with leader or not
+func isLearnerReady(id uint64) error {
+	// check learner progress is almost catching up the leader.
+	raftStatus := raftStatus()
+
+	// leader's raftStatus.Progress is not nil
+	if raftStatus.Progress == nil {
+		return ErrNotLeader
+	}
+
+	var learnerMatch uint64
+	isFound := false
+	leaderID := raftStatus.ID
+	for memberID, progress := range raftStatus.Progress {
+		if uint64(id) == memberID {
+			// check its status
+			learnerMatch = progress.Match
+			isFound = true
+			break
+		}
+	}
+
+	if isFound {
+		leaderMatch := raftStatus.Progress[leaderID].Match
+		// the learner's Match not caught up with leader yet
+		if float64(learnerMatch) < float64(leaderMatch)*readyPercent {
+			return ErrLearnerNotReady
+		}
+	}
 
 	return nil
 }

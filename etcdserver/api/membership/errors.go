@@ -26,7 +26,6 @@ var (
 	ErrIDNotFound       = errors.New("membership: ID not found")
 	ErrPeerURLexists    = errors.New("membership: peerURL exists")
 	ErrMemberNotLearner = errors.New("membership: can only promote a learner member")
-	ErrLearnerNotReady  = errors.New("membership: can only promote a learner member which catches up with leader")
 )
 
 func isKeyNotFound(err error) bool {
