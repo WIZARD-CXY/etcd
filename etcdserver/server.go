@@ -1632,6 +1632,7 @@ func (s *EtcdServer) RemoveMember(ctx context.Context, id uint64) ([]*membership
 // PromoteMember promotes a learner node to a voting node.
 func (s *EtcdServer) PromoteMember(ctx context.Context, id uint64) ([]*membership.Member, error) {
 	resp, err := s.promoteMember(ctx, id)
+	plog.Infof("%x: resp = %+v, err = %v", uint64(s.ID()), resp, err)
 	if err != ErrNotLeader {
 		return resp, err
 	}
@@ -1644,8 +1645,11 @@ func (s *EtcdServer) PromoteMember(ctx context.Context, id uint64) ([]*membershi
 		if err != nil {
 			return nil, err
 		}
+
+		plog.Infof("%x: forwarding to leader %+v", uint64(s.ID()), leader)
 		for _, url := range leader.PeerURLs {
 			resp, err := promoteMemberHTTP(cctx, url, id, s.peerRt)
+			plog.Infof("%x: resp = %+v, err = %v", uint64(s.ID()), resp, err)
 			if err == nil {
 				return resp, nil
 			}
@@ -1695,7 +1699,7 @@ func (s *EtcdServer) promoteMember(ctx context.Context, id uint64) ([]*membershi
 }
 
 func (s *EtcdServer) mayPromoteMember(id types.ID) error {
-	err := isLearnerReady(uint64(id))
+	err := s.isLearnerReady(uint64(id))
 	if err != nil {
 		return err
 	}
@@ -1723,12 +1727,13 @@ func (s *EtcdServer) mayPromoteMember(id types.ID) error {
 // check whether the learner catches up with leader or not.
 // Note: it will return nil if member is not found in cluster or if member is not learner.
 // These two conditions will be checked before apply phase later.
-func isLearnerReady(id uint64) error {
+func (s *EtcdServer) isLearnerReady(id uint64) error {
 	// sanity check, this can happen in the unit test when we do not start node.
 	if raftStatus == nil {
 		return nil
 	}
 	rs := raftStatus()
+	plog.Infof("%x: raftStatus = %+v", uint64(s.ID()), rs)
 
 	// leader's raftStatus.Progress is not nil
 	if rs.Progress == nil {

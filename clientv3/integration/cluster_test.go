@@ -215,13 +215,19 @@ func TestMemberAddForLearner(t *testing.T) {
 	}
 }
 
-func TestMemberPromoteForNotReadyLearner(t *testing.T) {
+func TestMemberPromoteForLearner(t *testing.T) {
 	defer testutil.AfterTest(t)
 
-	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1})
+	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 3})
 	defer clus.Terminate(t)
-	// first client is talked to leader because cluster size is 1
-	capi := clus.Client(0)
+
+	// member promote request can be sent to any server in cluster,
+	// the request will be auto-forwarded to leader on server-side.
+	// This test explicitly includes the server-side forwarding by
+	// sending the request to follower.
+	leaderIdx := clus.WaitLeader(t)
+	followerIdx := (leaderIdx+1)%3
+	capi := clus.Client(followerIdx)
 
 	urls := []string{"http://127.0.0.1:1234"}
 	isLearner := true
@@ -245,7 +251,8 @@ func TestMemberPromoteForNotReadyLearner(t *testing.T) {
 		t.Fatalf("Added 1 learner node to cluster, got %d", numberOfLearners)
 	}
 
-	// since we do not start learner, learner must be not ready.
+	// learner is not started yet. Expect learner progress check to fail.
+	// As the result, member promote request will fail.
 	_, err = capi.MemberPromote(context.Background(), learnerID)
 	expectedErrKeywords := "can only promote a learner member which catches up with leader"
 	if err == nil {
@@ -254,6 +261,16 @@ func TestMemberPromoteForNotReadyLearner(t *testing.T) {
 	if !strings.Contains(err.Error(), expectedErrKeywords) {
 		t.Errorf("expecting error to contain %s, got %s", expectedErrKeywords, err.Error())
 	}
+
+	// create and launch learner member based on the response of V3 Member Add API.
+	// (the response has information on peer urls of the existing members in cluster)
+	learnerMember := clus.MustNewMember(t, memberAddResp)
+	clus.Members = append(clus.Members, learnerMember)
+	if err := learnerMember.Launch(); err != nil {
+		t.Fatal(err)
+	}
+
+	// TODO: retry promotion until learner is ready and promoted
 }
 
 // TestMaxLearnerInCluster verifies that the maximum number of learners allowed in a cluster is 1
