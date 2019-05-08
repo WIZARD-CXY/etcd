@@ -226,7 +226,7 @@ func TestMemberPromoteForLearner(t *testing.T) {
 	// This test explicitly includes the server-side forwarding by
 	// sending the request to follower.
 	leaderIdx := clus.WaitLeader(t)
-	followerIdx := (leaderIdx+1)%3
+	followerIdx := (leaderIdx + 1) % 3
 	capi := clus.Client(followerIdx)
 
 	urls := []string{"http://127.0.0.1:1234"}
@@ -269,7 +269,6 @@ func TestMemberPromoteForLearner(t *testing.T) {
 	if err := learnerMember.Launch(); err != nil {
 		t.Fatal(err)
 	}
-
 	// TODO: retry promotion until learner is ready and promoted
 }
 

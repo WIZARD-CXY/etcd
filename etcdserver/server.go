@@ -1732,7 +1732,7 @@ func (s *EtcdServer) isLearnerReady(id uint64) error {
 	if raftStatus == nil {
 		return nil
 	}
-	rs := raftStatus()
+	rs := s.raftStatus()
 	plog.Infof("%x: raftStatus = %+v", uint64(s.ID()), rs)
 
 	// leader's raftStatus.Progress is not nil
@@ -2612,4 +2612,8 @@ func (s *EtcdServer) IsLearner() bool {
 // IsMemberExist returns if the member with the given id exists in cluster.
 func (s *EtcdServer) IsMemberExist(id types.ID) bool {
 	return s.cluster.IsMemberExist(id)
+}
+
+func (s *EtcdServer) raftStatus() raft.Status {
+	return s.r.Node.Status()
 }
