@@ -533,6 +533,21 @@ etcd_server_is_leader
 # type: "counter"
 etcd_server_leader_changes_seen_total
 
+# name: "etcd_server_is_learner"
+# description: "Whether or not this member is a learner. 1 if is, 0 otherwise."
+# type: "gauge"
+etcd_server_is_learner
+
+# name: "etcd_debugging_promote_failures"
+# description: "The total number of learner promote  failures (likely learner not ready)."
+# type: "counter"
+etcd_debugging_learner_promote_failures
+
+# name: "etcd_debugging_promote_success"
+# description: "The total number of successful learner promotions."
+# type: "counter"
+etcd_debugging_learner_promote_success
+
 # name: "etcd_server_proposals_applied_total"
 # description: "The total number of consensus proposals applied."
 # type: "gauge"
