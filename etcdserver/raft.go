@@ -659,6 +659,9 @@ func getIDs(lg *zap.Logger, snap *raftpb.Snapshot, ents []raftpb.Entry) ([]uint6
 		for _, id := range snap.Metadata.ConfState.Voters {
 			ids[id] = true
 		}
+		for _, id := range snap.Metadata.ConfState.Learners {
+			learnerIDs[id] = true
+		}
 	}
 	for _, e := range ents {
 		if e.Type != raftpb.EntryConfChange {
@@ -723,7 +726,7 @@ func createConfigChangeEnts(lg *zap.Logger, ids []uint64, learners []uint64, sel
 
 	// NB: always add self first, then remove other nodes. Raft will panic if the
 	// set of voters ever becomes empty.
-	if !foundVoter {
+	if !foundVoter && !foundLearner {
 		m := membership.Member{
 			ID:             types.ID(self),
 			RaftAttributes: membership.RaftAttributes{PeerURLs: []string{"http://localhost:2380"}},
@@ -762,12 +765,10 @@ func createConfigChangeEnts(lg *zap.Logger, ids []uint64, learners []uint64, sel
 
 		b, err := json.Marshal(promoteChangeContext)
 		if err != nil {
-			if err != nil {
-				if lg != nil {
-					lg.Panic("failed to marshal member", zap.Error(err))
-				} else {
-					plog.Panicf("marshal member should never fail: %v", err)
-				}
+			if lg != nil {
+				lg.Panic("failed to marshal member", zap.Error(err))
+			} else {
+				plog.Panicf("marshal member should never fail: %v", err)
 			}
 		}
 
