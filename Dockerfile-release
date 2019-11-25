@@ -1,7 +1,7 @@
 FROM k8s.gcr.io/debian-base:v1.0.0
 
-ADD etcd /usr/local/bin/
-ADD etcdctl /usr/local/bin/
+ADD bin/etcd /usr/local/bin/
+ADD bin/etcdctl /usr/local/bin/
 RUN mkdir -p /var/etcd/
 RUN mkdir -p /var/lib/etcd/
 

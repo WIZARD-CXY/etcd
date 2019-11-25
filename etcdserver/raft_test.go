@@ -33,6 +33,8 @@ import (
 func TestGetIDs(t *testing.T) {
 	addcc := &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 2}
 	addEntry := raftpb.Entry{Type: raftpb.EntryConfChange, Data: pbutil.MustMarshal(addcc)}
+	addlearnercc := &raftpb.ConfChange{Type: raftpb.ConfChangeAddLearnerNode, NodeID: 4}
+	addLearnerEntry := raftpb.Entry{Type: raftpb.EntryConfChange, Data: pbutil.MustMarshal(addlearnercc)}
 	removecc := &raftpb.ConfChange{Type: raftpb.ConfChangeRemoveNode, NodeID: 2}
 	removeEntry := raftpb.Entry{Type: raftpb.EntryConfChange, Data: pbutil.MustMarshal(removecc)}
 	normalEntry := raftpb.Entry{Type: raftpb.EntryNormal}
@@ -44,20 +46,25 @@ func TestGetIDs(t *testing.T) {
 		ents      []raftpb.Entry
 
 		widSet []uint64
+		wlearneridSet []uint64
 	}{
-		{nil, []raftpb.Entry{}, []uint64{}},
+		{nil, []raftpb.Entry{}, []uint64{}, []uint64{}},
 		{&raftpb.ConfState{Voters: []uint64{1}},
-			[]raftpb.Entry{}, []uint64{1}},
+			[]raftpb.Entry{}, []uint64{1},[]uint64{}},
 		{&raftpb.ConfState{Voters: []uint64{1}},
-			[]raftpb.Entry{addEntry}, []uint64{1, 2}},
+			[]raftpb.Entry{addLearnerEntry}, []uint64{1},[]uint64{4}},
+		{&raftpb.ConfState{Voters: []uint64{1},Learners: []uint64{4}},
+			[]raftpb.Entry{}, []uint64{1},[]uint64{4}},
 		{&raftpb.ConfState{Voters: []uint64{1}},
-			[]raftpb.Entry{addEntry, removeEntry}, []uint64{1}},
+			[]raftpb.Entry{addEntry}, []uint64{1, 2},[]uint64{}},
 		{&raftpb.ConfState{Voters: []uint64{1}},
-			[]raftpb.Entry{addEntry, normalEntry}, []uint64{1, 2}},
+			[]raftpb.Entry{addEntry, removeEntry}, []uint64{1},[]uint64{}},
 		{&raftpb.ConfState{Voters: []uint64{1}},
-			[]raftpb.Entry{addEntry, normalEntry, updateEntry}, []uint64{1, 2}},
+			[]raftpb.Entry{addEntry, normalEntry}, []uint64{1, 2},[]uint64{}},
 		{&raftpb.ConfState{Voters: []uint64{1}},
-			[]raftpb.Entry{addEntry, removeEntry, normalEntry}, []uint64{1}},
+			[]raftpb.Entry{addEntry, normalEntry, updateEntry}, []uint64{1, 2},[]uint64{}},
+		{&raftpb.ConfState{Voters: []uint64{1}},
+			[]raftpb.Entry{addEntry, removeEntry, normalEntry}, []uint64{1},[]uint64{}},
 	}
 
 	for i, tt := range tests {
@@ -65,9 +72,12 @@ func TestGetIDs(t *testing.T) {
 		if tt.confState != nil {
 			snap.Metadata.ConfState = *tt.confState
 		}
-		idSet := getIDs(testLogger, &snap, tt.ents)
+		idSet, lidSet := getIDs(testLogger, &snap, tt.ents)
 		if !reflect.DeepEqual(idSet, tt.widSet) {
 			t.Errorf("#%d: idset = %#v, want %#v", i, idSet, tt.widSet)
+		}
+		if !reflect.DeepEqual(lidSet, tt.wlearneridSet) {
+			t.Errorf("#%d: lidSet = %#v, want %#v", i, lidSet, tt.wlearneridSet)
 		}
 	}
 }
@@ -81,11 +91,26 @@ func TestCreateConfigChangeEnts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	promoteChangeContext := membership.ConfigChangeContext{
+		Member: membership.Member{
+			ID: types.ID(4),
+		},
+		IsPromote: true,
+	}
+	
+	lctx, err := json.Marshal(promoteChangeContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	addcc1 := &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Context: ctx}
+	promotelearner4 := &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 4, Context: lctx}
 	removecc2 := &raftpb.ConfChange{Type: raftpb.ConfChangeRemoveNode, NodeID: 2}
 	removecc3 := &raftpb.ConfChange{Type: raftpb.ConfChangeRemoveNode, NodeID: 3}
 	tests := []struct {
 		ids         []uint64
+		learnerIDs  []uint64
 		self        uint64
 		term, index uint64
 
@@ -93,6 +118,7 @@ func TestCreateConfigChangeEnts(t *testing.T) {
 	}{
 		{
 			[]uint64{1},
+			[]uint64{},
 			1,
 			1, 1,
 
@@ -100,6 +126,7 @@ func TestCreateConfigChangeEnts(t *testing.T) {
 		},
 		{
 			[]uint64{1, 2},
+			[]uint64{},
 			1,
 			1, 1,
 
@@ -107,6 +134,7 @@ func TestCreateConfigChangeEnts(t *testing.T) {
 		},
 		{
 			[]uint64{1, 2},
+			[]uint64{},
 			1,
 			2, 2,
 
@@ -114,6 +142,7 @@ func TestCreateConfigChangeEnts(t *testing.T) {
 		},
 		{
 			[]uint64{1, 2, 3},
+			[]uint64{},
 			1,
 			2, 2,
 
@@ -124,6 +153,7 @@ func TestCreateConfigChangeEnts(t *testing.T) {
 		},
 		{
 			[]uint64{2, 3},
+			[]uint64{},
 			2,
 			2, 2,
 
@@ -133,6 +163,7 @@ func TestCreateConfigChangeEnts(t *testing.T) {
 		},
 		{
 			[]uint64{2, 3},
+			[]uint64{},
 			1,
 			2, 2,
 
@@ -142,10 +173,22 @@ func TestCreateConfigChangeEnts(t *testing.T) {
 				{Term: 2, Index: 5, Type: raftpb.EntryConfChange, Data: pbutil.MustMarshal(removecc3)},
 			},
 		},
+		{
+			[]uint64{2, 3},
+			[]uint64{4},
+			4,
+			2, 2,
+
+			[]raftpb.Entry{
+				{Term: 2, Index: 3, Type: raftpb.EntryConfChange, Data: pbutil.MustMarshal(promotelearner4)},
+				{Term: 2, Index: 4, Type: raftpb.EntryConfChange, Data: pbutil.MustMarshal(removecc2)},
+				{Term: 2, Index: 5, Type: raftpb.EntryConfChange, Data: pbutil.MustMarshal(removecc3)},
+			},
+		},
 	}
 
 	for i, tt := range tests {
-		gents := createConfigChangeEnts(testLogger, tt.ids, tt.self, tt.term, tt.index)
+		gents := createConfigChangeEnts(testLogger, tt.ids, tt.learnerIDs, tt.self, tt.term, tt.index)
 		if !reflect.DeepEqual(gents, tt.wents) {
 			t.Errorf("#%d: ents = %v, want %v", i, gents, tt.wents)
 		}

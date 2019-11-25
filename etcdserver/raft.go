@@ -575,10 +575,12 @@ func restartAsStandaloneNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types
 		}
 	}
 
+	voters, learners := getIDs(cfg.Logger, snapshot, ents)
 	// force append the configuration change entries
 	toAppEnts := createConfigChangeEnts(
 		cfg.Logger,
-		getIDs(cfg.Logger, snapshot, ents),
+		voters,
+		learners,
 		uint64(id),
 		st.Term,
 		st.Commit,
@@ -649,11 +651,16 @@ func restartAsStandaloneNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types
 // ID-related entry:
 // - ConfChangeAddNode, in which case the contained ID will be added into the set.
 // - ConfChangeRemoveNode, in which case the contained ID will be removed from the set.
-func getIDs(lg *zap.Logger, snap *raftpb.Snapshot, ents []raftpb.Entry) []uint64 {
+// - ConfChangeAddLearnerNode, in which case the contained ID will be added into the learners set.
+func getIDs(lg *zap.Logger, snap *raftpb.Snapshot, ents []raftpb.Entry) ([]uint64, []uint64) {
 	ids := make(map[uint64]bool)
+	learnerIDs := make(map[uint64]bool)
 	if snap != nil {
 		for _, id := range snap.Metadata.ConfState.Voters {
 			ids[id] = true
+		}
+		for _, id := range snap.Metadata.ConfState.Learners {
+			learnerIDs[id] = true
 		}
 	}
 	for _, e := range ents {
@@ -665,6 +672,8 @@ func getIDs(lg *zap.Logger, snap *raftpb.Snapshot, ents []raftpb.Entry) []uint64
 		switch cc.Type {
 		case raftpb.ConfChangeAddNode:
 			ids[cc.NodeID] = true
+		case raftpb.ConfChangeAddLearnerNode:
+			learnerIDs[cc.NodeID] = true
 		case raftpb.ConfChangeRemoveNode:
 			delete(ids, cc.NodeID)
 		case raftpb.ConfChangeUpdateNode:
@@ -682,7 +691,14 @@ func getIDs(lg *zap.Logger, snap *raftpb.Snapshot, ents []raftpb.Entry) []uint64
 		sids = append(sids, id)
 	}
 	sort.Sort(sids)
-	return []uint64(sids)
+
+	lids := make(types.Uint64Slice, 0, len(learnerIDs))
+	for id := range learnerIDs {
+		lids = append(lids, id)
+	}
+	sort.Sort(lids)
+
+	return []uint64(sids), []uint64(lids)
 }
 
 // createConfigChangeEnts creates a series of Raft entries (i.e.
@@ -690,11 +706,18 @@ func getIDs(lg *zap.Logger, snap *raftpb.Snapshot, ents []raftpb.Entry) []uint64
 // `self` is _not_ removed, even if present in the set.
 // If `self` is not inside the given ids, it creates a Raft entry to add a
 // default member with the given `self`.
-func createConfigChangeEnts(lg *zap.Logger, ids []uint64, self uint64, term, index uint64) []raftpb.Entry {
-	found := false
+func createConfigChangeEnts(lg *zap.Logger, ids []uint64, learners []uint64, self uint64, term, index uint64) []raftpb.Entry {
+	foundVoter := false
 	for _, id := range ids {
 		if id == self {
-			found = true
+			foundVoter = true
+		}
+	}
+
+	foundLearner := false
+	for _, id := range learners {
+		if id == self {
+			foundLearner = true
 		}
 	}
 
@@ -703,7 +726,7 @@ func createConfigChangeEnts(lg *zap.Logger, ids []uint64, self uint64, term, ind
 
 	// NB: always add self first, then remove other nodes. Raft will panic if the
 	// set of voters ever becomes empty.
-	if !found {
+	if !foundVoter && !foundLearner {
 		m := membership.Member{
 			ID:             types.ID(self),
 			RaftAttributes: membership.RaftAttributes{PeerURLs: []string{"http://localhost:2380"}},
@@ -721,6 +744,40 @@ func createConfigChangeEnts(lg *zap.Logger, ids []uint64, self uint64, term, ind
 			NodeID:  self,
 			Context: ctx,
 		}
+		e := raftpb.Entry{
+			Type:  raftpb.EntryConfChange,
+			Data:  pbutil.MustMarshal(cc),
+			Term:  term,
+			Index: next,
+		}
+		ents = append(ents, e)
+		next++
+	}
+
+	if foundLearner {
+		// build the context for the promote confChange. mark IsPromote to true.
+		promoteChangeContext := membership.ConfigChangeContext{
+			Member: membership.Member{
+				ID: types.ID(self),
+			},
+			IsPromote: true,
+		}
+
+		b, err := json.Marshal(promoteChangeContext)
+		if err != nil {
+			if lg != nil {
+				lg.Panic("failed to marshal member", zap.Error(err))
+			} else {
+				plog.Panicf("marshal member should never fail: %v", err)
+			}
+		}
+
+		cc := &raftpb.ConfChange{
+			Type:    raftpb.ConfChangeAddNode,
+			NodeID:  self,
+			Context: b,
+		}
+
 		e := raftpb.Entry{
 			Type:  raftpb.EntryConfChange,
 			Data:  pbutil.MustMarshal(cc),
