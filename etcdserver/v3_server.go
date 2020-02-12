@@ -204,9 +204,35 @@ func isTxnReadonly(r *pb.TxnRequest) bool {
 }
 
 func (s *EtcdServer) Compact(ctx context.Context, r *pb.CompactionRequest) (*pb.CompactionResponse, error) {
+	trace := traceutil.TODO()
+	// pause compaction
+	if r.Revision == 0 {
+		if s.compactor != nil {
+			s.compactor.Pause()
+		}
+		resp := &pb.CompactionResponse{}
+		resp.Header = &pb.ResponseHeader{}
+		resp.Header.Revision = s.kv.Rev()
+		trace.AddField(traceutil.Field{Key: "response_revision", Value: resp.Header.Revision})
+
+		return resp, nil
+	}
+	// resume compaction
+	if r.Revision == -1 {
+		if s.compactor != nil {
+			s.compactor.Resume()
+		}
+		resp := &pb.CompactionResponse{}
+		resp.Header = &pb.ResponseHeader{}
+		resp.Header.Revision = s.kv.Rev()
+		trace.AddField(traceutil.Field{Key: "response_revision", Value: resp.Header.Revision})
+
+		return resp, nil
+	}
+
 	startTime := time.Now()
 	result, err := s.processInternalRaftRequestOnce(ctx, pb.InternalRaftRequest{Compaction: r})
-	trace := traceutil.TODO()
+
 	if result != nil && result.trace != nil {
 		trace = result.trace
 		defer func() {
