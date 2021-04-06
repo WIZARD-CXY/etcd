@@ -95,6 +95,11 @@ type backend struct {
 	// openReadTxN is the number of currently open read transactions in the backend
 	openReadTxN int64
 
+	// freelistType is the freelist type of backend boltdb
+	freelistType bolt.FreelistType
+	// initialMmapSize is the initial mmapSize of backend boltdb
+	initialMmapSize int
+
 	mu sync.RWMutex
 	db *bolt.DB
 
@@ -165,8 +170,10 @@ func newBackend(bcfg BackendConfig) *backend {
 	b := &backend{
 		db: db,
 
-		batchInterval: bcfg.BatchInterval,
-		batchLimit:    bcfg.BatchLimit,
+		batchInterval:   bcfg.BatchInterval,
+		batchLimit:      bcfg.BatchLimit,
+		freelistType:    bcfg.BackendFreelistType,
+		initialMmapSize: bcfg.mmapSize(),
 
 		readTx: &readTx{
 			buf: txReadBuffer{
@@ -369,7 +376,14 @@ func (b *backend) defrag() error {
 
 	b.batchTx.tx = nil
 
-	tmpdb, err := bolt.Open(b.db.Path()+".tmp", 0600, boltOpenOptions)
+	bopts := &bolt.Options{}
+	if boltOpenOptions != nil {
+		*bopts = *boltOpenOptions
+	}
+	bopts.InitialMmapSize = b.initialMmapSize
+	bopts.FreelistType = b.freelistType
+
+	tmpdb, err := bolt.Open(b.db.Path()+".tmp", 0600, bopts)
 	if err != nil {
 		return err
 	}
@@ -420,7 +434,7 @@ func (b *backend) defrag() error {
 		}
 	}
 
-	b.db, err = bolt.Open(dbp, 0600, boltOpenOptions)
+	b.db, err = bolt.Open(dbp, 0600, bopts)
 	if err != nil {
 		if b.lg != nil {
 			b.lg.Fatal("failed to open database", zap.String("path", dbp), zap.Error(err))
@@ -446,6 +460,7 @@ func (b *backend) defrag() error {
 		b.lg.Info(
 			"defragmented",
 			zap.String("path", dbp),
+			zap.String("bolt-freelistType", string(bopts.FreelistType)),
 			zap.Int64("current-db-size-bytes-diff", size2-size1),
 			zap.Int64("current-db-size-bytes", size2),
 			zap.String("current-db-size", humanize.Bytes(uint64(size2))),
